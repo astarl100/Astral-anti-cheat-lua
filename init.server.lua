@@ -23,6 +23,20 @@ for _, child in ipairs(Modules:GetChildren()) do
     end
 end
 
+local RemoteGuard = require(Modules:WaitForChild("RemoteGuard"))
+RemoteGuard:Init()
+
+RemoteGuard:Scan(game:GetService("ReplicatedStorage"), {
+    rate = 10,
+    burst = 20,
+    window = 1,
+})
+
+RemoteGuard:Scan(script.Parent, {
+    rate = 5,
+    burst = 10,
+})
+
 function Astral:AddStrike(player, reason, weight)
     local p = self.Players[player]
     if not p then return end
@@ -44,6 +58,9 @@ function Astral:Punish(player, reason)
         player:Kick("Astral: Banned — " .. reason)
     end
 end
+
+local MessageScript = require(Modules:WaitForChild("MessageScript"))
+MessageScript.Init(Astral)
 
 Players.PlayerAdded:Connect(function(player)
     Astral.Players[player] = {
