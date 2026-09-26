@@ -8,3 +8,4 @@ Astral-античит для роблокса
 · Anti-ESP
 · Anti-Aimbot
 · Hack GUI Detect
+· RemoteGuard.lua
