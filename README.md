@@ -11,3 +11,5 @@ Astral-античит для роблокса
 · Hack GUI Detect
 · RemoteGuard
 · Honeypot
+· ReachDetect
+· CharacterStateCheck.lua
