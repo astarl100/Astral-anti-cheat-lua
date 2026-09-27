@@ -51,6 +51,17 @@ function Astral:Punish(player, reason)
     end
 end
 
+-- ReachDetect hook
+local ReachDetect = require(Modules:WaitForChild("ReachDetect"))
+
+Players.PlayerAdded:Connect(function(player)
+    ReachDetect:_watch(player)
+end)
+
+for _, player in ipairs(Players:GetPlayers()) do
+    ReachDetect:_watch(player)
+end
+
 -- RemoteGuard
 local RemoteGuard = require(Modules:WaitForChild("RemoteGuard"))
 RemoteGuard:Init()
