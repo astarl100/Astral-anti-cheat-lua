@@ -1,42 +1,33 @@
+-- Services
 local Players           = game:GetService("Players")
 local RunService        = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+-- Config + Modules
 local Config  = require(script.Parent.config)
 local Modules = script.Parent.modules
 
+-- Astral table
 local Astral = {
     Version = "1.0.0",
     Players = {},
 }
 
+-- Load detectors
 local detectors = {}
 for _, child in ipairs(Modules:GetChildren()) do
     if child:IsA("ModuleScript") then
         local ok, mod = pcall(require, child)
         if ok and type(mod) == "table" and mod.Run then
             table.insert(detectors, mod)
-            print(("[Astral] Загружен модуль: %s"):format(child.Name))
+            print(("[Astral] Loaded: %s"):format(child.Name))
         else
-            warn(("[Astral] Не удалось загрузить %s"):format(child.Name))
+            warn(("[Astral] Failed: %s"):format(child.Name))
         end
     end
 end
 
-local RemoteGuard = require(Modules:WaitForChild("RemoteGuard"))
-RemoteGuard:Init()
-
-RemoteGuard:Scan(game:GetService("ReplicatedStorage"), {
-    rate = 10,
-    burst = 20,
-    window = 1,
-})
-
-RemoteGuard:Scan(script.Parent, {
-    rate = 5,
-    burst = 10,
-})
-
+-- AddStrike
 function Astral:AddStrike(player, reason, weight)
     local p = self.Players[player]
     if not p then return end
@@ -50,6 +41,7 @@ function Astral:AddStrike(player, reason, weight)
     end
 end
 
+-- Punish
 function Astral:Punish(player, reason)
     print(("[Astral] PUNISH %s — %s"):format(player.Name, reason))
     if Config.PunishAction == "kick" then
@@ -59,17 +51,37 @@ function Astral:Punish(player, reason)
     end
 end
 
+-- RemoteGuard
+local RemoteGuard = require(Modules:WaitForChild("RemoteGuard"))
+RemoteGuard:Init()
+
+RemoteGuard:Scan(ReplicatedStorage, {
+    rate  = 10,
+    burst = 20,
+})
+
+RemoteGuard:Scan(script.Parent, {
+    rate  = 5,
+    burst = 10,
+})
+
+-- Honeypot
+local Honeypot = require(Modules:WaitForChild("Honeypot"))
+Honeypot:Start()
+
+-- MessageScript
 local MessageScript = require(Modules:WaitForChild("MessageScript"))
 MessageScript.Init(Astral)
 
+-- Player events
 Players.PlayerAdded:Connect(function(player)
     Astral.Players[player] = {
         strikes = {},
         lastStrike = 0,
         data = {
-            lastPos = nil,
-            airStart = nil,
-            lastAim = nil,
+            lastPos   = nil,
+            airStart  = nil,
+            lastAim   = nil,
             lastCheck = 0,
         }
     }
@@ -79,10 +91,12 @@ Players.PlayerRemoving:Connect(function(player)
     Astral.Players[player] = nil
 end)
 
+-- Heartbeat loop
 RunService.Heartbeat:Connect(function(dt)
     for _, player in ipairs(Players:GetPlayers()) do
         local state = Astral.Players[player]
         if not state then continue end
+
         local char = player.Character
         if not char or not char:FindFirstChild("HumanoidRootPart") then continue end
 
@@ -96,4 +110,5 @@ RunService.Heartbeat:Connect(function(dt)
     end
 end)
 
+-- Global export
 _G.Astral = Astral
