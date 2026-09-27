@@ -1,0 +1,853 @@
+============================================================
+ASTRAL ANTI-CHEAT - ИНСТРУКЦИЯ
+============================================================
+
+СТРУКТУРА В ROBLOX STUDIO
+------------------------------------------------------------
+ServerScriptService/
+  Astral (Script)                    <- init.server.lua
+    config (ModuleScript)            <- config.lua
+    modules (Folder)
+      FlyDetect (ModuleScript)
+      SpeedDetect (ModuleScript)
+      TeleportDetect (ModuleScript)
+      NoClipDetect (ModuleScript)
+      AntiESP (ModuleScript)
+      AntiAimbot (ModuleScript)
+      GUIDetect (ModuleScript)
+      ReachDetect (ModuleScript)
+      CharacterStateCheck (ModuleScript)
+      RemoteGuard (ModuleScript)
+      Honeypot (ModuleScript)
+      MessageScript (ModuleScript)
+
+
+ШАГИ
+------------------------------------------------------------
+1. Создай папку "Astral" внутри ServerScriptService
+2. Вставь внутрь "Astral" Script, вставь в него код init.server.lua
+3. Вставь внутрь "Astral" ModuleScript с именем "config", вставь в него код config.lua
+4. Вставь внутрь "Astral" Folder с именем "modules"
+5. Внутри "modules" создай 12 ModuleScript'ов с именами выше
+6. Вставь код в каждый ModuleScript
+7. Включи HTTP: Game Settings -> Security -> Allow HTTP Requests
+8. Заполни Telegram токен и Discord webhook в MessageScript
+9. Добавь "LastAttacker" в свою боевую систему для ReachDetect
+10. Протестируй с двумя игроками
+
+
+============================================================
+ФАЙЛ: config.lua
+============================================================
+
+return {
+    MaxWalkSpeed     = 24,
+    SpeedTolerance   = 8,
+    SpeedStrikes     = 5,
+
+    MaxAirTime       = 3,
+    MaxVerticalRise  = 40,
+    FlyStrikes       = 3,
+
+    MaxTeleportDist  = 60,
+    TeleportStrikes  = 2,
+
+    NoClipCheckRate  = 0.25,
+    NoClipStrikes    = 4,
+
+    MaxAimSnapAngle  = 0.35,
+    AimbotStrikes    = 4,
+
+    ReachStrikes          = 3,
+    CharacterStateStrikes = 2,
+
+    StrikeDecay      = 12,
+    PunishAction     = "kick",
+}
+
+
+============================================================
+ФАЙЛ: init.server.lua
+============================================================
+
+local Players           = game:GetService("Players")
+local RunService        = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config  = require(script.Parent.config)
+local Modules = script.Parent.modules
+
+local Astral = {
+    Version = "1.0.0",
+    Players = {},
+}
+
+local detectors = {}
+for _, child in ipairs(Modules:GetChildren()) do
+    if child:IsA("ModuleScript") then
+        local ok, mod = pcall(require, child)
+        if ok and type(mod) == "table" and mod.Run then
+            table.insert(detectors, mod)
+            print(("[Astral] Загружен: %s"):format(child.Name))
+        else
+            warn(("[Astral] Ошибка загрузки: %s"):format(child.Name))
+        end
+    end
+end
+
+function Astral:AddStrike(player, reason, weight)
+    local p = self.Players[player]
+    if not p then return end
+    p.strikes[reason] = (p.strikes[reason] or 0) + (weight or 1)
+    p.lastStrike = os.clock()
+
+    warn(("[Astral] %s - %s (%d)"):format(player.Name, reason, p.strikes[reason]))
+
+    if p.strikes[reason] >= (Config[reason .. "Strikes"] or 3) then
+        self:Punish(player, reason)
+    end
+end
+
+function Astral:Punish(player, reason)
+    print(("[Astral] НАКАЗАНИЕ %s - %s"):format(player.Name, reason))
+    if Config.PunishAction == "kick" then
+        player:Kick("Astral Anti-Cheat: " .. reason)
+    elseif Config.PunishAction == "ban" then
+        player:Kick("Astral: Забанен - " .. reason)
+    end
+end
+
+local ReachDetect = require(Modules:WaitForChild("ReachDetect"))
+
+Players.PlayerAdded:Connect(function(player)
+    ReachDetect:_watch(player)
+end)
+
+for _, player in ipairs(Players:GetPlayers()) do
+    ReachDetect:_watch(player)
+end
+
+local RemoteGuard = require(Modules:WaitForChild("RemoteGuard"))
+RemoteGuard:Init()
+
+RemoteGuard:Scan(ReplicatedStorage, {
+    rate  = 10,
+    burst = 20,
+})
+
+RemoteGuard:Scan(script.Parent, {
+    rate  = 5,
+    burst = 10,
+})
+
+local Honeypot = require(Modules:WaitForChild("Honeypot"))
+Honeypot:Start()
+
+local MessageScript = require(Modules:WaitForChild("MessageScript"))
+MessageScript.Init(Astral)
+
+Players.PlayerAdded:Connect(function(player)
+    Astral.Players[player] = {
+        strikes = {},
+        lastStrike = 0,
+        data = {
+            lastPos   = nil,
+            airStart  = nil,
+            lastAim   = nil,
+            lastCheck = 0,
+        }
+    }
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    Astral.Players[player] = nil
+end)
+
+RunService.Heartbeat:Connect(function(dt)
+    for _, player in ipairs(Players:GetPlayers()) do
+        local state = Astral.Players[player]
+        if not state then continue end
+
+        local char = player.Character
+        if not char or not char:FindFirstChild("HumanoidRootPart") then continue end
+
+        if os.clock() - state.lastStrike > Config.StrikeDecay then
+            for k in pairs(state.strikes) do state.strikes[k] = 0 end
+        end
+
+        for _, detector in ipairs(detectors) do
+            pcall(detector.Run, player, char, state, dt, Astral)
+        end
+    end
+end)
+
+_G.Astral = Astral
+
+
+============================================================
+ФАЙЛ: modules/FlyDetect.lua
+============================================================
+
+local Config = require(game.ServerScriptService.Astral.config)
+
+return {
+    Run = function(player, char, state, dt, Astral)
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hrp or not hum then return end
+
+        local now = os.clock()
+        local grounded = hum.FloorMaterial ~= Enum.Material.Air
+
+        if grounded then
+            state.data.airStart = nil
+            return
+        end
+
+        if not state.data.airStart then
+            state.data.airStart = now
+            return
+        end
+
+        local airTime = now - state.data.airStart
+        if airTime > Config.MaxAirTime then
+            Astral:AddStrike(player, "Fly")
+            state.data.airStart = now
+        end
+
+        local vel = hrp.AssemblyLinearVelocity
+        if vel.Y > Config.MaxVerticalRise then
+            Astral:AddStrike(player, "Fly")
+        end
+    end
+}
+
+
+============================================================
+ФАЙЛ: modules/SpeedDetect.lua
+============================================================
+
+local Config = require(game.ServerScriptService.Astral.config)
+
+return {
+    Run = function(player, char, state, dt, Astral)
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hrp or not hum then return end
+
+        local speed = (Vector3.new(hrp.AssemblyLinearVelocity.X, 0, hrp.AssemblyLinearVelocity.Z)).Magnitude
+        local maxAllowed = math.max(hum.WalkSpeed, Config.MaxWalkSpeed) + Config.SpeedTolerance
+
+        if hum:GetState() == Enum.HumanoidStateType.Physics then return end
+        if char:FindFirstChildOfClass("Tool") then return end
+
+        if speed > maxAllowed then
+            Astral:AddStrike(player, "Speed")
+        end
+    end
+}
+
+
+============================================================
+ФАЙЛ: modules/TeleportDetect.lua
+============================================================
+
+local Config = require(game.ServerScriptService.Astral.config)
+
+return {
+    Run = function(player, char, state, dt, Astral)
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+
+        local pos = hrp.Position
+        if state.data.lastPos then
+            local dist = (pos - state.data.lastPos).Magnitude
+            local speed = dist / math.max(dt, 0.001)
+            if speed > Config.MaxTeleportDist / 0.1 then
+                Astral:AddStrike(player, "Teleport")
+            end
+        end
+        state.data.lastPos = pos
+    end
+}
+
+
+============================================================
+ФАЙЛ: modules/NoClipDetect.lua
+============================================================
+
+local Config = require(game.ServerScriptService.Astral.config)
+
+return {
+    Run = function(player, char, state, dt, Astral)
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hrp or not hum then return end
+
+        local now = os.clock()
+        if now - state.data.lastCheck < Config.NoClipCheckRate then return end
+        state.data.lastCheck = now
+
+        local params = RaycastParams.new()
+        params.FilterDescendantsInstances = { char }
+        params.FilterType = Enum.RaycastFilterType.Exclude
+
+        local origin = hrp.Position
+        local inside = false
+        for _, dir in ipairs({
+            Vector3.new(1,0,0), Vector3.new(-1,0,0),
+            Vector3.new(0,0,1), Vector3.new(0,0,-1)
+        }) do
+            local hit = workspace:Raycast(origin, dir * 1.5, params)
+            if hit and hit.Instance.CanCollide then inside = true end
+        end
+
+        local moving = hrp.AssemblyLinearVelocity.Magnitude > 2
+        if inside and moving then
+            Astral:AddStrike(player, "NoClip")
+        end
+    end
+}
+
+
+============================================================
+ФАЙЛ: modules/AntiESP.lua
+============================================================
+
+return {
+    Run = function(player, char, state, dt, Astral)
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+        local tag = hrp:FindFirstChild("AstralTag")
+        if not tag then
+            tag = Instance.new("ObjectValue")
+            tag.Name = "AstralTag"
+            tag.Value = hrp
+            tag.Parent = hrp
+        end
+    end
+}
+
+
+============================================================
+ФАЙЛ: modules/AntiAimbot.lua
+============================================================
+
+local Config = require(game.ServerScriptService.Astral.config)
+
+return {
+    Run = function(player, char, state, dt, Astral)
+        local head = char:FindFirstChild("Head")
+        local hrp  = char:FindFirstChild("HumanoidRootPart")
+        if not head or not hrp then return end
+
+        local look = hrp.CFrame.LookVector
+        local vel  = hrp.AssemblyLinearVelocity
+        if vel.Magnitude < 1 then return end
+
+        local moveDir = vel.Unit
+        local dot = look:Dot(moveDir)
+
+        if dot < -0.7 then
+            Astral:AddStrike(player, "Aimbot")
+        end
+    end
+}
+
+
+============================================================
+ФАЙЛ: modules/GUIDetect.lua
+============================================================
+
+return {
+    Run = function(player, char, state, dt, Astral)
+        local suspicious = {
+            "Synapse", "Krnl", "ScriptWare", "SirHurt",
+            "InfiniteYield", "DarkDex", "SimpleSpy"
+        }
+
+        for _, obj in ipairs(char:GetDescendants()) do
+            for _, name in ipairs(suspicious) do
+                if obj.Name:lower():find(name:lower(), 1, true) then
+                    Astral:AddStrike(player, "GUI", 2)
+                    return
+                end
+            end
+        end
+
+        if not char:FindFirstChild("Humanoid") then
+            Astral:AddStrike(player, "GUI")
+        end
+    end
+}
+
+
+============================================================
+ФАЙЛ: modules/ReachDetect.lua
+============================================================
+
+local Players = game:GetService("Players")
+
+local Config = {
+    MaxReach      = 10,
+    CheckCooldown = 0.15,
+    IgnoreTeams   = true,
+    Debug         = false,
+}
+
+local ReachDetect = {
+    _lastHealth = {},
+    _lastCheck  = {},
+}
+
+local function getRoot(character)
+    if not character then return nil end
+    return character:FindFirstChild("HumanoidRootPart")
+end
+
+local function getHumanoid(character)
+    if not character then return nil end
+    return character:FindFirstChildOfClass("Humanoid")
+end
+
+function ReachDetect:_onHealthChanged(victim, attacker)
+    if not victim or not attacker then return end
+    if victim == attacker then return end
+
+    local vChar = victim.Character
+    local aChar = attacker.Character
+    if not vChar or not aChar then return end
+
+    local vRoot = getRoot(vChar)
+    local aRoot = getRoot(aChar)
+    if not vRoot or not aRoot then return end
+
+    if Config.IgnoreTeams and victim.Team and attacker.Team then
+        if victim.Team == attacker.Team then return end
+    end
+
+    local now = os.clock()
+    local key = attacker.UserId .. ":" .. victim.UserId
+    if self._lastCheck[key] and now - self._lastCheck[key] < Config.CheckCooldown then
+        return
+    end
+    self._lastCheck[key] = now
+
+    local dist = (vRoot.Position - aRoot.Position).Magnitude
+    if dist > Config.MaxReach then
+        if _G.Astral then
+            _G.Astral:AddStrike(attacker, "Reach", 2)
+        end
+        if Config.Debug then
+            warn(("[ReachDetect] %s -> %s : %.1f studs"):format(attacker.Name, victim.Name, dist))
+        end
+    end
+end
+
+function ReachDetect:_watch(player)
+    local function bindCharacter(char)
+        local hum = getHumanoid(char)
+        if not hum then return end
+
+        hum.HealthChanged:Connect(function(newHealth)
+            local key = player.UserId
+            local old = self._lastHealth[key]
+
+            if old and newHealth < old then
+                local attacker = hum:FindFirstChild("LastAttacker")
+                if attacker and attacker:IsA("ObjectValue") and attacker.Value then
+                    local attPlayer = Players:GetPlayerFromCharacter(attacker.Value.Parent)
+                    if attPlayer then
+                        self:_onHealthChanged(player, attPlayer)
+                    end
+                else
+                    local userId = hum:GetAttribute("LastAttackerUserId")
+                    if userId then
+                        local attPlayer = Players:GetPlayerByUserId(userId)
+                        if attPlayer then
+                            self:_onHealthChanged(player, attPlayer)
+                        end
+                    end
+                end
+            end
+
+            self._lastHealth[key] = newHealth
+        end)
+    end
+
+    player.CharacterAdded:Connect(bindCharacter)
+    if player.Character then
+        bindCharacter(player.Character)
+    end
+end
+
+function ReachDetect:Run(player, char, state, dt, Astral)
+    local hum = getHumanoid(char)
+    if not hum then return end
+    self._lastHealth[player.UserId] = hum.Health
+end
+
+return ReachDetect
+
+
+============================================================
+ФАЙЛ: modules/CharacterStateCheck.lua
+============================================================
+
+local Config = {
+    RequiredParts = {
+        "Head",
+        "HumanoidRootPart",
+        "Torso",
+        "UpperTorso",
+        "LowerTorso",
+        "LeftLeg",
+        "RightLeg",
+        "LeftFoot",
+        "RightFoot",
+    },
+    CheckRate  = 0.5,
+    MaxMissing = 1,
+    Debug      = false,
+}
+
+local CharacterState = {
+    _lastCheck = {},
+}
+
+local function isR15(char)
+    return char:FindFirstChild("UpperTorso") ~= nil
+end
+
+function CharacterState:_checkParts(player, char)
+    local missing = 0
+    local missingNames = {}
+
+    for _, partName in ipairs(Config.RequiredParts) do
+        if not char:FindFirstChild(partName) then
+            if partName == "Torso" and isR15(char) then
+                continue
+            end
+            if (partName == "UpperTorso" or partName == "LowerTorso") and not isR15(char) then
+                continue
+            end
+
+            missing = missing + 1
+            table.insert(missingNames, partName)
+        end
+    end
+
+    if missing >= Config.MaxMissing then
+        if _G.Astral then
+            _G.Astral:AddStrike(player, "CharacterState", 3)
+        end
+        if Config.Debug then
+            warn(("[CharacterState] %s missing: %s"):format(player.Name, table.concat(missingNames, ", ")))
+        end
+    end
+end
+
+function CharacterState:Run(player, char, state, dt, Astral)
+    local now = os.clock()
+    if self._lastCheck[player.UserId] and now - self._lastCheck[player.UserId] < Config.CheckRate then
+        return
+    end
+    self._lastCheck[player.UserId] = now
+
+    self:_checkParts(player, char)
+end
+
+return CharacterState
+
+
+============================================================
+ФАЙЛ: modules/RemoteGuard.lua
+============================================================
+
+local Config = {
+    DefaultRate  = 10,
+    DefaultBurst = 20,
+    WindowSize   = 1,
+    StrikeWeight = 1,
+    Debug        = false,
+}
+
+local RemoteGuard = {
+    _remotes = {},
+    _players = {},
+    _initialized = false,
+}
+
+local function key(player, remote)
+    return player.UserId .. ":" .. remote:GetFullName()
+end
+
+function RemoteGuard:Register(remote, options)
+    assert(typeof(remote) == "Instance", "RemoteGuard:Register - нужен Instance")
+    assert(
+        remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction") or remote:IsA("UnreliableRemoteEvent"),
+        "RemoteGuard:Register - это не Remote"
+    )
+
+    options = options or {}
+    self._remotes[remote] = {
+        rate   = options.rate   or Config.DefaultRate,
+        burst  = options.burst  or Config.DefaultBurst,
+        window = options.window or Config.WindowSize,
+        custom = options.custom,
+    }
+
+    if remote:IsA("RemoteEvent") or remote:IsA("UnreliableRemoteEvent") then
+        remote.OnServerEvent:Connect(function(player, ...)
+            if not self:_allow(player, remote) then return end
+            if self._remotes[remote].custom then
+                self._remotes[remote].custom(player, ...)
+            end
+        end)
+    elseif remote:IsA("RemoteFunction") then
+        remote.OnServerInvoke = function(player, ...)
+            if not self:_allow(player, remote) then
+                return nil
+            end
+            if self._remotes[remote].custom then
+                return self._remotes[remote].custom(player, ...)
+            end
+            return nil
+        end
+    end
+
+    if Config.Debug then
+        print(("[RemoteGuard] Зарегистрирован: %s"):format(remote:GetFullName()))
+    end
+end
+
+function RemoteGuard:_allow(player, remote)
+    local cfg = self._remotes[remote]
+    if not cfg then return false end
+
+    local state = self._players[player]
+    if not state then return false end
+
+    local k = key(player, remote)
+    local bucket = state[k]
+
+    if not bucket then
+        bucket = { tokens = cfg.burst, last = os.clock() }
+        state[k] = bucket
+    end
+
+    local now = os.clock()
+    local elapsed = now - bucket.last
+    bucket.last = now
+
+    bucket.tokens = math.min(cfg.burst, bucket.tokens + elapsed * cfg.rate)
+
+    if bucket.tokens < 1 then
+        self:_strike(player, remote, "RemoteSpam")
+        return false
+    end
+
+    bucket.tokens = bucket.tokens - 1
+    return true
+end
+
+function RemoteGuard:_strike(player, remote, reason)
+    if Config.Debug then
+        warn(("[RemoteGuard] %s - %s (%s)"):format(player.Name, reason, remote:GetFullName()))
+    end
+
+    if _G.Astral and _G.Astral.AddStrike then
+        _G.Astral:AddStrike(player, reason, Config.StrikeWeight)
+    end
+end
+
+function RemoteGuard:Init()
+    if self._initialized then return end
+    self._initialized = true
+
+    local Players = game:GetService("Players")
+
+    Players.PlayerAdded:Connect(function(player)
+        self._players[player] = {}
+    end)
+
+    Players.PlayerRemoving:Connect(function(player)
+        self._players[player] = nil
+    end)
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        self._players[player] = {}
+    end
+
+    if Config.Debug then
+        print("[RemoteGuard] Инициализирован")
+    end
+end
+
+function RemoteGuard:Scan(parent, options)
+    options = options or {}
+    local count = 0
+    for _, obj in ipairs(parent:GetDescendants()) do
+        if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") or obj:IsA("UnreliableRemoteEvent") then
+            self:Register(obj, options)
+            count = count + 1
+        end
+    end
+    if Config.Debug then
+        print(("[RemoteGuard] Авто-скан: %d Remotes"):format(count))
+    end
+    return count
+end
+
+return RemoteGuard
+
+
+============================================================
+ФАЙЛ: modules/Honeypot.lua
+============================================================
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = {
+    Enabled      = true,
+    PunishStrike = 10,
+    DestroyDelay = 0.5,
+    RespawnDelay = 3,
+
+    Honeypots = {
+        { name = "AdminPanel",   type = "RemoteEvent" },
+        { name = "GiveMoney",    type = "RemoteFunction" },
+        { name = "FreeRobux",    type = "RemoteEvent" },
+        { name = "SetAdmin",     type = "RemoteEvent" },
+        { name = "KickAll",      type = "RemoteEvent" },
+        { name = "GodMode",      type = "RemoteEvent" },
+        { name = "InfiniteJump", type = "RemoteEvent" },
+        { name = "SpawnItem",    type = "RemoteFunction" },
+        { name = "UnlockAll",    type = "RemoteEvent" },
+        { name = "AntiBan",      type = "RemoteEvent" },
+    },
+}
+
+local Honeypot = {
+    _active = {},
+    _initialized = false,
+}
+
+local function onTriggered(player, remote)
+    if not _G.Astral then return end
+    _G.Astral:AddStrike(player, "Honeypot", Config.PunishStrike)
+end
+
+local function createHoneypot(def)
+    local remote
+    if def.type == "RemoteFunction" then
+        remote = Instance.new("RemoteFunction")
+        remote.OnServerInvoke = function(player)
+            onTriggered(player, remote)
+            return nil
+        end
+    else
+        remote = Instance.new("RemoteEvent")
+        remote.OnServerEvent:Connect(function(player)
+            onTriggered(player, remote)
+        end)
+    end
+    remote.Name = def.name
+    remote.Parent = ReplicatedStorage
+
+    Honeypot._active[def.name] = remote
+
+    task.delay(Config.DestroyDelay, function()
+        if remote then remote:Destroy() end
+    end)
+end
+
+function Honeypot:Start()
+    if not Config.Enabled then return end
+    if self._initialized then return end
+    self._initialized = true
+
+    for _, def in ipairs(Config.Honeypots) do
+        createHoneypot(def)
+    end
+
+    task.spawn(function()
+        while task.wait(Config.RespawnDelay) do
+            for _, def in ipairs(Config.Honeypots) do
+                local existing = ReplicatedStorage:FindFirstChild(def.name)
+                if not existing then
+                    createHoneypot(def)
+                end
+            end
+        end
+    end)
+end
+
+return Honeypot
+
+
+============================================================
+ФАЙЛ: modules/MessageScript.lua
+============================================================
+
+local HttpService = game:GetService("HttpService")
+
+local Telegram = {
+    Enabled  = true,
+    BotToken = "ТВОЙ_ТОКЕН_БОТА",
+    ChatID   = "ТВОЙ_CHAT_ID",
+}
+
+local Discord = {
+    Enabled    = true,
+    WebhookURL = "ТВОЙ_WEBHOOK_URL",
+}
+
+local function buildMessage(player, reason)
+    local now = os.date("!%Y-%m-%d %H:%M:%S")
+    return string.format(
+        "[Astral] Игрок: %s (ID: %d)\nПричина: %s\nВремя (UTC): %s",
+        player.Name, player.UserId, reason, now
+    )
+end
+
+local function sendTelegram(text)
+    if not Telegram.Enabled then return end
+    local url = ("https://api.telegram.org/bot%s/sendMessage"):format(Telegram.BotToken)
+    local body = HttpService:JSONEncode({
+        chat_id = Telegram.ChatID,
+        text = text,
+        parse_mode = "HTML",
+    })
+    pcall(function()
+        HttpService:PostAsync(url, body, Enum.HttpContentType.ApplicationJson)
+    end)
+end
+
+local function sendDiscord(text)
+    if not Discord.Enabled then return end
+    local body = HttpService:JSONEncode({
+        content = text,
+        username = "Astral Anti-Cheat",
+    })
+    pcall(function()
+        HttpService:PostAsync(Discord.WebhookURL, body, Enum.HttpContentType.ApplicationJson)
+    end)
+end
+
+return {
+    Init = function(Astral)
+        local originalPunish = Astral.Punish
+        Astral.Punish = function(self, player, reason)
+            local text = buildMessage(player, reason)
+            task.spawn(sendTelegram, text)
+            task.spawn(sendDiscord, text)
+            return originalPunish(self, player, reason)
+        end
+    end
+}
+
+
+============================================================
+КОНЕЦ ФАЙЛА
+============================================================
