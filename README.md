@@ -10,4 +10,4 @@ Astral-античит для роблокса
 · Anti-Aimbot
 · Hack GUI Detect
 · RemoteGuard
-
+· Honeypot
