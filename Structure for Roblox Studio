@@ -1,0 +1,12 @@
+ServerScriptService/
+  Astral (Script)                    <- init.server.lua
+    config (ModuleScript)
+    modules (Folder)
+      ...
+      HybridConfig (ModuleScript)    <- HybridConfig.lua
+      HybridServer (ModuleScript)    <- HybridServer.lua
+      ...
+
+StarterPlayer/
+  StarterPlayerScripts/
+    HybridClient (LocalScript)       <- HybridClient.lua
