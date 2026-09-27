@@ -34,7 +34,7 @@ function Astral:AddStrike(player, reason, weight)
     p.strikes[reason] = (p.strikes[reason] or 0) + (weight or 1)
     p.lastStrike = os.clock()
 
-    warn(("[Astral] %s — %s (%d)"):format(player.Name, reason, p.strikes[reason]))
+    warn(("[Astral] %s - %s (%d)"):format(player.Name, reason, p.strikes[reason]))
 
     if p.strikes[reason] >= (Config[reason .. "Strikes"] or 3) then
         self:Punish(player, reason)
@@ -43,11 +43,11 @@ end
 
 -- Punish
 function Astral:Punish(player, reason)
-    print(("[Astral] PUNISH %s — %s"):format(player.Name, reason))
+    print(("[Astral] PUNISH %s - %s"):format(player.Name, reason))
     if Config.PunishAction == "kick" then
         player:Kick("Astral Anti-Cheat: " .. reason)
     elseif Config.PunishAction == "ban" then
-        player:Kick("Astral: Banned — " .. reason)
+        player:Kick("Astral: Banned - " .. reason)
     end
 end
 
@@ -79,6 +79,10 @@ RemoteGuard:Scan(script.Parent, {
 -- Honeypot
 local Honeypot = require(Modules:WaitForChild("Honeypot"))
 Honeypot:Start()
+
+-- Hybrid
+local HybridServer = require(Modules:WaitForChild("HybridServer"))
+HybridServer:Init()
 
 -- MessageScript
 local MessageScript = require(Modules:WaitForChild("MessageScript"))
