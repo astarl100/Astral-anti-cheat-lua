@@ -12,4 +12,4 @@ Astral-античит для роблокса
 · RemoteGuard
 · Honeypot
 · ReachDetect
-· CharacterStateCheck.lua
+· CharacterStateCheck
